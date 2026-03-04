@@ -1,11 +1,41 @@
 from fastapi import FastAPI, Query, HTTPException
+from contextlib import asynccontextmanager
 from .astrology import get_planet_positions
+from .scheduler import create_scheduler
+from app.api.routes import device_router
+import logging
 
-app = FastAPI(title="Astrology API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    This function controls app startup and shutdown.
+    """
+    scheduler = create_scheduler()
+    scheduler.start()
+    print("✅ Scheduler started")
+
+    try:
+        yield
+    finally:
+        scheduler.shutdown()
+        print("🛑 Scheduler stopped")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
+logging.getLogger("apscheduler").setLevel(logging.WARNING)
+
+app = FastAPI(
+    title="Astrology API",
+    lifespan=lifespan
+)
 
 @app.get("/")
 def read_root():
     return {"message": "Hello"}
+
+app.include_router(device_router)
 
 @app.get("/astro")
 def astro(

@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+.env/
+
+# Environment files
+.env
+.env.*
+
+# Secrets
+firebase-service-account.json
+secrets/
+*.pem
+*.key
+
+# OS files
+.DS_Store
+
+# Logs
+*.log
+
+# SQLite (if using local db)
+*.db
+
+# IDE
+.vscode/
+.idea/

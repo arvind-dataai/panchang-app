@@ -1,10 +1,13 @@
 import swisseph as swe
 import os
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+from functools import lru_cache
 
 # Set path to ephemeris files
 EPHE_PATH = os.path.join(os.path.dirname(__file__), "ephe")
 swe.set_ephe_path(EPHE_PATH)
+swe.set_sid_mode(swe.SIDM_LAHIRI)
 
 # Rashi Names
 RASHIS = [
@@ -62,86 +65,257 @@ KARANAS = [
     "Shakuni","Chatushpada","Naga","Kimstughna"
 ]
 
-def get_rashi(longitude, jd):
-    try:
-        ayan = swe.get_ayanamsa_ut(jd)
-        sidereal_long = (longitude - ayan) % 360
-        index = int(sidereal_long // 30)
-        return RASHIS[index], sidereal_long
-    except Exception as e:
-        raise ValueError(f"Error calculating Rashi: {str(e)}")
+@lru_cache(maxsize=50000)
+def calc_body(jd, body):
+    return swe.calc_ut(jd, body)[0][0]
 
-def get_nakshatra(longitude, jd):
-    try:
-        ayan = swe.get_ayanamsa_ut(jd)
-        sidereal_long = (longitude - ayan) % 360
-        index = int(sidereal_long // (360 / 27))
-        pada = int((sidereal_long % (360 / 27)) // (360 / 108)) + 1
-        return NAKSHATRAS[index], pada, sidereal_long
-    except Exception as e:
-        raise ValueError(f"Error calculating Nakshatra: {str(e)}")
+@lru_cache(maxsize=50000)
+def ayanamsa(jd):
+    return swe.get_ayanamsa_ut(jd)
 
-def get_lagna(jd, lat, lon):
+
+def binary_search_transition(jd_left, jd_right, value_fn, boundary, direction="start", tol=1e-6):
+    """
+    Finds JD where value_fn(jd) crosses boundary.
+    tol ~ 1e-6 JD ≈ 0.086 seconds
+    """
+
+    left_val = value_fn(jd_left)
+
+    while abs(jd_right - jd_left) > tol:
+        mid = (jd_left + jd_right) / 2
+        val = value_fn(mid)
+
+        if boundary in (0, 360):
+            # wrap-around detection (359 → 0)
+            crossed = val < left_val
+        else:
+            crossed = val >= boundary
+
+        if direction == "start":
+            if not crossed:
+                jd_left = mid
+                left_val = val
+            else:
+                jd_right = mid
+        else:  # end
+            if crossed:
+                jd_right = mid
+            else:
+                jd_left = mid
+                left_val = val
+
+    return jd_right
+
+
+def get_moon_sidereal_longitude(jd):
+    """
+    Returns Moon sidereal longitude for a given Julian Day.
+    """
+    moon_lon = calc_body(jd, swe.MOON)
+    ayan = ayanamsa(jd)
+    return (moon_lon - ayan) % 360
+
+
+def jd_to_local_datetime(jd, tz_offset):
+    """Convert Julian Day to local datetime string"""
+    if jd is None:
+        return None
+
+    # Convert JD → UTC datetime
+    utc_dt = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(days=(jd - 2440587.5))
+
+    # Convert UTC → local timezone
+    local_dt = utc_dt + timedelta(hours=tz_offset)
+
+    return local_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def get_nakshatra_details(jd, tz_offset=5.5):
+    """
+    Returns nakshatra name, pada, start_time, end_time
+    """
+
+    nak_deg = 360 / 27
+
+    # Current moon longitude
+    current_lon = get_moon_sidereal_longitude(jd)
+    nak_index = int(current_lon // nak_deg)
+    nak_name = NAKSHATRAS[nak_index]
+
+    # Pada (1–4)
+    pada = int((current_lon % nak_deg) // (nak_deg / 4)) + 1
+
+    start_boundary = nak_index * nak_deg
+    end_boundary = start_boundary + nak_deg
+    value_fn = get_moon_sidereal_longitude
+
+    # ---- Start time ----
+    start_jd = binary_search_transition(jd - 1, jd, value_fn, start_boundary, direction="start")
+
+    # ---- End time ----
+    end_jd = binary_search_transition(jd, jd + 1, value_fn, end_boundary, direction="end")
+
+    return {
+        "nakshatra": nak_name,
+        "pada": pada,
+        "start_time": jd_to_local_datetime(start_jd, tz_offset),
+        "end_time": jd_to_local_datetime(end_jd, tz_offset)
+    }
+
+def get_lagna_sidereal_longitude(jd, lat, lon):
+    """
+    Returns sidereal longitude of Lagna (Ascendant)
+    """
+    houses = swe.houses(jd, lat, lon)[0]
+    tropical_asc = houses[0]  # Ascendant
+    ayan = ayanamsa(jd)
+    return (tropical_asc - ayan) % 360
+
+
+def get_lagna_details(jd, lat, lon, tz_offset=5.5):
+    """
+    Returns Lagna name, start_time, end_time
+    """
     try:
-        lag = swe.houses(jd, lat, lon)[0][0]  # Ascendant
-        ayan = swe.get_ayanamsa_ut(jd)
-        sidereal_long = (lag - ayan) % 360
-        index = int(sidereal_long // 30)
-        return RASHIS[index], sidereal_long
+        lagna_lon = get_lagna_sidereal_longitude(jd, lat, lon)
+        lagna_index = int(lagna_lon // 30)
+        lagna_name = RASHIS[lagna_index]
+
+        def lagna_fn(jd):
+            return get_lagna_sidereal_longitude(jd, lat, lon)
+
+        start_boundary = lagna_index * 30
+        end_boundary = start_boundary + 30
+
+        # ---- Start time ----
+        start_jd = binary_search_transition(jd - 1, jd, lagna_fn, start_boundary, direction="start")
+
+        # ---- End time ----
+        end_jd = binary_search_transition(jd, jd + 1, lagna_fn, end_boundary, direction="end")
+
+        return {
+            "rashi": lagna_name,
+            "start_time": jd_to_local_datetime(start_jd, tz_offset),
+            "end_time": jd_to_local_datetime(end_jd, tz_offset)
+        }
     except Exception as e:
         raise ValueError(f"Error calculating Lagna: {str(e)}")
 
-def get_tithi_details(jd):
+def get_tithi_details(jd, tz_offset=5.5):
+    """
+    Returns tithi number, name, paksha, start_time, end_time
+    """
     try:
-        sun_lon = swe.calc_ut(jd, swe.SUN)[0][0]
-        moon_lon = swe.calc_ut(jd, swe.MOON)[0][0]
+        def moon_sun_diff(jd):
+            sun_lon = calc_body(jd, swe.SUN)
+            moon_lon = calc_body(jd, swe.MOON)
+            return (moon_lon - sun_lon) % 360
 
-        diff = (moon_lon - sun_lon) % 360
-        tithi_num = int(diff / 12) + 1  # 1–30
-
-        # Tithi name
-        tithi_name = TITHIS[tithi_num - 1]
-
-        # Paksha
+        diff = moon_sun_diff(jd)
+        tithi_index = int(diff // 12)
+        tithi_num = tithi_index + 1
+        tithi_name = TITHIS[tithi_index]
         paksha = "Shukla" if tithi_num <= 15 else "Krishna"
 
-        return tithi_num, tithi_name, paksha
+        start_boundary = tithi_index * 12
+        end_boundary = start_boundary + 12
+        value_fn = moon_sun_diff
+        print("start_boundary :",start_boundary,"end_boundary :",end_boundary)
+
+        # ---- Start time ----
+        print(jd - 1, jd, value_fn, start_boundary,"start")
+        start_jd = binary_search_transition(jd - 1, jd, value_fn, start_boundary, direction="start")
+
+        # ---- End time ----
+        end_jd = binary_search_transition(jd, jd + 1, value_fn, end_boundary, direction="end")
+
+
+        return {
+            "number": tithi_num,
+            "name": tithi_name,
+            "paksha": paksha,
+            "start_time": jd_to_local_datetime(start_jd, tz_offset),
+            "end_time": jd_to_local_datetime(end_jd, tz_offset)
+        }
+
     except Exception as e:
         raise ValueError(f"Error calculating Tithi: {str(e)}")
 
-def get_yoga_name(jd):
+def get_yoga_details(jd, tz_offset=5.5):
+    """
+    Returns yoga number, name, start_time, end_time
+    """
     try:
-        sun_lon = swe.calc_ut(jd, swe.SUN)[0][0]
-        moon_lon = swe.calc_ut(jd, swe.MOON)[0][0]
-        ayan = swe.get_ayanamsa_ut(jd)
+        yoga_deg = 360 / 27
 
-        sun_sidereal = (sun_lon - ayan) % 360
-        moon_sidereal = (moon_lon - ayan) % 360
+        def yoga_angle(jd):
+            sun = calc_body(jd, swe.SUN)
+            moon = calc_body(jd, swe.MOON)
+            ayan = ayanamsa(jd)
+            sun_sid = (sun - ayan) % 360
+            moon_sid = (moon - ayan) % 360
+            return (sun_sid + moon_sid) % 360
 
-        yoga_angle = (sun_sidereal + moon_sidereal) % 360
-        yoga_num = int(yoga_angle / (360 / 27))
+        angle = yoga_angle(jd)
+        yoga_index = int(angle // yoga_deg)
+        yoga_name = YOGAS[yoga_index]
 
-        return yoga_num + 1, YOGAS[yoga_num]
+        start_boundary = yoga_index * yoga_deg
+        end_boundary = start_boundary + yoga_deg
+        value_fn = yoga_angle
+
+        # ---- Start time ----
+        start_jd = binary_search_transition(jd - 1, jd, value_fn, start_boundary, direction="start")
+
+        # ---- End time ----
+        end_jd = binary_search_transition(jd, jd + 1, value_fn, end_boundary, direction="end")
+        return {
+            "number": yoga_index + 1,
+            "name": yoga_name,
+            "start_time": jd_to_local_datetime(start_jd, tz_offset),
+            "end_time": jd_to_local_datetime(end_jd, tz_offset)
+        }
     except Exception as e:
         raise ValueError(f"Error calculating Yoga: {str(e)}")
 
-def get_karana_name(jd):
+def get_karana_details(jd, tz_offset=5.5):
+    """
+    Returns karana name, start_time, end_time
+    """
     try:
-        sun_lon = swe.calc_ut(jd, swe.SUN)[0][0]
-        moon_lon = swe.calc_ut(jd, swe.MOON)[0][0]
-        diff = (moon_lon - sun_lon) % 360
+        def diff(jd):
+            sun = calc_body(jd, swe.SUN)
+            moon = calc_body(jd, swe.MOON)
+            return (moon - sun) % 360
 
-        karana_number = int(diff // 6)  # 0–59
+        karana_index = int(diff(jd) // 6)
 
         repeating = ["Bava","Balava","Kaulava","Taitila","Garaja","Vanija","Vishti"]
-
-        if karana_number == 0:
-            return "Kimstughna"
-        elif 1 <= karana_number <= 56:
-            return repeating[(karana_number - 1) % 7]
+        if karana_index == 0:
+            name = "Kimstughna"
+        elif 1 <= karana_index <= 56:
+            name = repeating[(karana_index - 1) % 7]
         else:
             fixed = ["Shakuni", "Chatushpada", "Naga", "Kimstughna"]
-            return fixed[karana_number - 57]
+            name = fixed[karana_index - 57]
+
+        start_boundary = karana_index * 6
+        end_boundary = start_boundary + 6
+        value_fn = diff
+
+        # ---- Start time ----
+        print(jd - 1, jd, value_fn, start_boundary,"start")
+        start_jd = binary_search_transition(jd - 1, jd, value_fn, start_boundary, direction="start")
+
+        # ---- End time ----
+        end_jd = binary_search_transition(jd, jd + 1, value_fn, end_boundary, direction="end")
+
+        return {
+            "name": name,
+            "start_time": jd_to_local_datetime(start_jd, tz_offset),
+            "end_time": jd_to_local_datetime(end_jd, tz_offset)
+        }
     except Exception as e:
         raise ValueError(f"Error calculating Karana: {str(e)}")
 
@@ -157,8 +331,8 @@ def get_var(jd,tz_offset=5.5):
 
 def get_masa(jd):
     try:
-        sun_lon = swe.calc_ut(jd, swe.SUN)[0][0]
-        ayan = swe.get_ayanamsa_ut(jd)
+        sun_lon = calc_body(jd, swe.SUN)
+        ayan = ayanamsa(jd)
         sidereal_sun = (sun_lon - ayan) % 360
         masa_num = int(sidereal_sun // 30)
 
@@ -169,20 +343,7 @@ def get_masa(jd):
         return MASA[masa_num]
     except Exception as e:
         raise ValueError(f"Error calculating Masa: {str(e)}")
-    
-def jd_to_local_time(jd, tz_offset):
-    """Convert Julian Day to local datetime string"""
-    if jd is None:
-        return None
-
-    # Convert JD → UTC datetime
-    utc_dt = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(days=(jd - 2440587.5))
-
-    # Convert UTC → local timezone
-    local_dt = utc_dt + timedelta(hours=tz_offset)
-
-    return local_dt.strftime("%H:%M:%S")
-    
+ 
 def get_sunrise_sunset(year, month, day, lat, lon, tz_offset=5.5):
     try:
         # swe.rise_trans: 1 = rise, 2 = set
@@ -192,13 +353,70 @@ def get_sunrise_sunset(year, month, day, lat, lon, tz_offset=5.5):
         sunset_jd  = swe.rise_trans(jd_start, swe.SUN, 2, geopos)[1][0]
 
         # Convert JD to local time (default IST: UTC+5:30)
-        sunrise_local = jd_to_local_time(sunrise_jd, tz_offset)
-        sunset_local = jd_to_local_time(sunset_jd, tz_offset)
+        sunrise_local = jd_to_local_datetime(sunrise_jd, tz_offset)
+        sunset_local = jd_to_local_datetime(sunset_jd, tz_offset)
 
         return sunrise_jd,sunrise_local, sunset_local
     except Exception as e:
         raise ValueError(f"Error calculating sunrise_sunset: {str(e)}")
     
+def get_moonrise_moonset(sunrise_jd, lat, lon, tz_offset=5.5):
+    """
+    Panchang-based Moonrise & Moonset
+    Window: sunrise → next sunrise
+    """
+
+    geopos = [lon, lat, 0]
+    next_sunrise_jd = sunrise_jd + 1
+
+    moonrise_jd = None
+    moonset_jd = None
+
+    # --- Moonrise ---
+    try:
+        # 1️⃣ Try within Panchang day
+        rise = swe.rise_trans(
+            sunrise_jd,
+            swe.MOON,
+            swe.CALC_RISE,
+            geopos
+        )[1][0]
+
+        if sunrise_jd <= rise < next_sunrise_jd:
+            moonrise_jd = rise
+        else:
+            # 2️⃣ Fallback: previous moonrise
+            prev_rise = swe.rise_trans(
+                sunrise_jd - 1,
+                swe.MOON,
+                swe.CALC_RISE,
+                geopos
+            )[1][0]
+
+            if prev_rise < sunrise_jd:
+                moonrise_jd = prev_rise
+
+    except:
+        pass
+
+    # --- Moonset ---
+    try:
+        set_ = swe.rise_trans(
+            sunrise_jd,
+            swe.MOON,
+            swe.CALC_SET,
+            geopos
+        )[1][0]
+
+        if sunrise_jd <= set_ < next_sunrise_jd:
+            moonset_jd = set_
+    except:
+        pass
+
+    return {
+        "moonrise": jd_to_local_datetime(moonrise_jd, tz_offset) if moonrise_jd else None,
+        "moonset": jd_to_local_datetime(moonset_jd, tz_offset) if moonset_jd else None
+    }
 
 
 def get_planet_positions(year, month, day, hour, lat, lon):
@@ -209,33 +427,80 @@ def get_planet_positions(year, month, day, hour, lat, lon):
         result = {}
 
         # Lagna
-        lagna_rashi, lagna_sid = get_lagna(sunrise_jd, lat, lon)
-        result["lagna"] = {"rashi": lagna_rashi, "sidereal_longitude": lagna_sid}
+        lagna_details = get_lagna_details(sunrise_jd, lat, lon)
+        result["lagna"] = lagna_details
 
-        # Moon Nakshatra only in return for now
-        moon_lon = swe.calc_ut(sunrise_jd, swe.MOON)[0][0]
-        moon_nak, moon_pada, _ = get_nakshatra(moon_lon, sunrise_jd)
-        result["moon"] = {"nakshatra": moon_nak, "pada": moon_pada}
+        # Moon Nakshatra
+        moon_details = get_nakshatra_details(sunrise_jd)
+        result["moon"] = moon_details
+        print("8",moon_details)
 
         # --- Panchang details ---
-        tithi_num, tithi_name, paksha = get_tithi_details(sunrise_jd)
-        yoga_num, yoga_name = get_yoga_name(sunrise_jd)
-        karana_name = get_karana_name(sunrise_jd)
+        tithi_details = get_tithi_details(sunrise_jd)
+        result["tithi"] = tithi_details
+        yoga_details = get_yoga_details(sunrise_jd)
+        result["yoga"] = yoga_details
+        karna_details  = get_karana_details(sunrise_jd)
+        result["karna"] = karna_details
         masa = get_masa(sunrise_jd)
         vara = get_var(sunrise_jd)
+
+        moon_time = get_moonrise_moonset(sunrise_jd,lat,lon)
+        result["moon_time"] = moon_time
         
         
 
         return {
                     "lagna": result["lagna"],
                     "moon": result["moon"],
-                    "tithi": {"number": tithi_num, "name": tithi_name, "paksha": paksha},
+                    "tithi": result["tithi"],
                     "masa": masa,
                     "var": vara,
-                    "yoga": {"number": yoga_num, "name": yoga_name},
-                    "karana": karana_name,
+                    "yoga": result["yoga"],
+                    "karana": result["karna"],
                     "sunrise": sunrise,
-                    "sunset": sunset
-                }
+                    "sunset": sunset,
+                    "moonset": result["moon_time"]["moonset"],
+                    "moonrise":  result["moon_time"]["moonrise"] 
+                    }
     except Exception as e:
         raise ValueError(f"Error calculating Panchang: {str(e)}")
+
+def get_today_nakshatra_end_datetime(lat: float, lon: float, timezone_str: str):
+    """
+    Returns today's nakshatra end time as timezone-aware datetime
+    """
+
+    tz = ZoneInfo(timezone_str)
+
+    # Current UTC
+    now_utc = datetime.utcnow().replace(tzinfo=timezone.utc)
+
+    # Convert to local timezone
+    local_now = now_utc.astimezone(tz)
+
+    year = local_now.year
+    month = local_now.month
+    day = local_now.day
+
+    # Calculate sunrise JD for this location
+    sunrise_jd, _, _ = get_sunrise_sunset(year, month, day, lat, lon, tz_offset=0)
+
+    # Calculate tz offset dynamically (in hours)
+    tz_offset_hours = local_now.utcoffset().total_seconds() / 3600
+
+    # Get nakshatra details
+    nak_details = get_nakshatra_details(sunrise_jd, tz_offset=tz_offset_hours)
+
+    # Convert end_time string → datetime
+    end_time_str = nak_details["end_time"]
+
+    if end_time_str is None:
+        return None
+
+    end_dt_naive = datetime.strptime(end_time_str, "%Y-%m-%d %H:%M:%S")
+
+    # Attach timezone
+    end_dt = end_dt_naive.replace(tzinfo=tz)
+
+    return end_dt
