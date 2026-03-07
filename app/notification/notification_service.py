@@ -67,7 +67,8 @@ def send_daily_notifications():
                 # -------------------------
                 # 🌅 Morning Window (6:00–6:05)
                 # -------------------------
-                if local_now.hour == 6 and 0 <= local_now.minute <= 5:
+                # if local_now.hour == 6 and 0 <= local_now.minute <= 5:
+                if 1==1:
 
                     notif_type = "DAILY_NAKSHATRA"
 

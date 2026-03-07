@@ -1,3 +1,6 @@
+apscheduler==3.10.4
+firebase-admin>=6.0.0
+sqlalchemy>=2.0.0
 aiohappyeyeballs==2.6.1
 aiohttp==3.12.14
 aiosignal==1.4.0

@@ -221,10 +221,8 @@ def get_tithi_details(jd, tz_offset=5.5):
         start_boundary = tithi_index * 12
         end_boundary = start_boundary + 12
         value_fn = moon_sun_diff
-        print("start_boundary :",start_boundary,"end_boundary :",end_boundary)
 
         # ---- Start time ----
-        print(jd - 1, jd, value_fn, start_boundary,"start")
         start_jd = binary_search_transition(jd - 1, jd, value_fn, start_boundary, direction="start")
 
         # ---- End time ----
@@ -305,7 +303,6 @@ def get_karana_details(jd, tz_offset=5.5):
         value_fn = diff
 
         # ---- Start time ----
-        print(jd - 1, jd, value_fn, start_boundary,"start")
         start_jd = binary_search_transition(jd - 1, jd, value_fn, start_boundary, direction="start")
 
         # ---- End time ----
@@ -421,6 +418,7 @@ def get_moonrise_moonset(sunrise_jd, lat, lon, tz_offset=5.5):
 
 def get_planet_positions(year, month, day, hour, lat, lon):
     try:
+        print(year, month, day, hour, lat, lon,"<=====get planet")
         sunrise_jd,sunrise, sunset = get_sunrise_sunset(year, month, day, lat, lon)
 
         jd = swe.julday(year, month, day, hour)
@@ -433,7 +431,6 @@ def get_planet_positions(year, month, day, hour, lat, lon):
         # Moon Nakshatra
         moon_details = get_nakshatra_details(sunrise_jd)
         result["moon"] = moon_details
-        print("8",moon_details)
 
         # --- Panchang details ---
         tithi_details = get_tithi_details(sunrise_jd)
