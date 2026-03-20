@@ -1,13 +1,63 @@
+import fcntl
+import logging
+import os
 from apscheduler.schedulers.background import BackgroundScheduler
 from app.notification.notification_service import send_daily_notifications
 
 _scheduler = None  # 🔒 singleton
+_scheduler_lock_handle = None
+logger = logging.getLogger("scheduler")
+
+
+def _acquire_scheduler_lock() -> bool:
+    global _scheduler_lock_handle
+
+    if _scheduler_lock_handle is not None:
+        return True
+
+    lock_path = os.getenv(
+        "SCHEDULER_LOCK_FILE",
+        "/tmp/nakshatra_app_scheduler.lock",
+    )
+    lock_handle = open(lock_path, "a+")
+
+    try:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_handle.close()
+        return False
+
+    lock_handle.seek(0)
+    lock_handle.truncate()
+    lock_handle.write(str(os.getpid()))
+    lock_handle.flush()
+    _scheduler_lock_handle = lock_handle
+    return True
+
+
+def _release_scheduler_lock():
+    global _scheduler_lock_handle
+
+    if _scheduler_lock_handle is None:
+        return
+
+    fcntl.flock(_scheduler_lock_handle.fileno(), fcntl.LOCK_UN)
+    _scheduler_lock_handle.close()
+    _scheduler_lock_handle = None
+
 
 def create_scheduler():
     global _scheduler
 
-    if _scheduler and _scheduler.running:
+    if _scheduler is not None:
         return _scheduler
+
+    if not _acquire_scheduler_lock():
+        logger.debug(
+            "Scheduler startup skipped in pid=%s because another process already owns the lock",
+            os.getpid(),
+        )
+        return None
 
     scheduler = BackgroundScheduler()
 
@@ -23,3 +73,13 @@ def create_scheduler():
 
     _scheduler = scheduler
     return scheduler
+
+
+def shutdown_scheduler():
+    global _scheduler
+
+    if _scheduler and _scheduler.running:
+        _scheduler.shutdown()
+
+    _scheduler = None
+    _release_scheduler_lock()

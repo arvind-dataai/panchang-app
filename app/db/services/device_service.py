@@ -25,14 +25,20 @@ class DeviceService:
 
         if existing_device:
             # Update existing device
-            existing_device.platform = platform
+            if platform and platform != "unknown":
+                existing_device.platform = platform
             existing_device.timezone = timezone
-            existing_device.fcm_token = fcm_token 
+            if fcm_token:
+                existing_device.fcm_token = fcm_token
+                existing_device.is_active = True
             existing_device.latitude = latitude
             existing_device.longitude = longitude
             existing_device.last_seen_at = datetime.utcnow()
 
             return DeviceRepository.update_device(db, existing_device)
+
+        if not fcm_token:
+            raise ValueError("FCM token is required for new device")
 
         # Create new device
         new_device = Device(

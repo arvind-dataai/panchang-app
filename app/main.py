@@ -1,9 +1,11 @@
 from fastapi import FastAPI, Query, HTTPException
 from contextlib import asynccontextmanager
 from .astrology import get_planet_positions
-from .scheduler import create_scheduler
+from .scheduler import create_scheduler, shutdown_scheduler
 from app.api.routes import device_router
 import logging
+
+logger = logging.getLogger("app")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -11,14 +13,18 @@ async def lifespan(app: FastAPI):
     This function controls app startup and shutdown.
     """
     scheduler = create_scheduler()
-    scheduler.start()
-    print("✅ Scheduler started")
+
+    if scheduler:
+        scheduler.start()
+        logger.debug("Scheduler started")
+    else:
+        logger.debug("Scheduler not started in this process")
 
     try:
         yield
     finally:
-        scheduler.shutdown()
-        print("🛑 Scheduler stopped")
+        shutdown_scheduler()
+        logger.debug("Scheduler stopped")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,6 +56,26 @@ def astro(
         data = get_planet_positions(year, month, day, hour, lat, lon)
         return data
     except ValueError as ve:
+        logger.error(
+            "ERROR in main.astro for year=%s month=%s day=%s hour=%s lat=%s lon=%s: %s",
+            year,
+            month,
+            day,
+            hour,
+            lat,
+            lon,
+            ve,
+        )
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
+        logger.error(
+            "ERROR in main.astro for year=%s month=%s day=%s hour=%s lat=%s lon=%s: %s",
+            year,
+            month,
+            day,
+            hour,
+            lat,
+            lon,
+            e,
+        )
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")

@@ -2,12 +2,12 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 import logging
 import os
-from datetime import datetime
 
 logger = logging.getLogger("firebase")
 # ---- Initialize Firebase only once ----
 _FIREBASE_APP = None
-FIREBASE_SERVICE_ACCOUNT = "/Users/arvind/Desktop/Utkarsh/nakshatra/google-services.json"
+
+
 def _initialize_firebase():
     global _FIREBASE_APP
 
@@ -22,11 +22,17 @@ def _initialize_firebase():
     cred = credentials.Certificate(service_account_path)
     _FIREBASE_APP = firebase_admin.initialize_app(cred)
 
-    logging.info("🔥 Firebase initialized successfully")
+    logger.debug("Firebase initialized")
     return _FIREBASE_APP
 
 
-def send_push_notification(token: str, title: str, body: str, data: dict | None = None):
+def send_push_notification(
+    token: str,
+    title: str,
+    body: str,
+    data: dict | None = None,
+    image_url: str | None = None,
+):
     """
     Sends real push notification via Firebase Cloud Messaging
     """
@@ -37,22 +43,38 @@ def send_push_notification(token: str, title: str, body: str, data: dict | None 
         message = messaging.Message(
             notification=messaging.Notification(
                 title=title,
-                body=body
+                body=body,
+                image=image_url,
             ),
             token=token,
-            data=data or {}
+            data=data or {},
+            android=messaging.AndroidConfig(
+                priority="high",
+                notification=messaging.AndroidNotification(
+                    channel_id="nakshatra_updates",
+                    sound="default",
+                    color="#F39C12",
+                    image=image_url,
+                    click_action="FLUTTER_NOTIFICATION_CLICK",
+                ),
+            ),
+            apns=messaging.APNSConfig(
+                payload=messaging.APNSPayload(
+                    aps=messaging.Aps(
+                        sound="default",
+                        mutable_content=True,
+                    )
+                )
+            ),
         )
 
         response = messaging.send(message)
-
-        logging.info("📲 FCM SENT SUCCESS")
-        logging.info(f"Message ID: {response}")
-        logging.info(f"Sent at: {datetime.utcnow().isoformat()}")
+        return response
 
     except messaging.UnregisteredError:
-        logging.warning(f"FCM invalid token detected: {token}")
+        logger.warning("FCM invalid token detected")
         raise ValueError("INVALID_FCM_TOKEN")
 
     except Exception as e:
-        logging.error("❌ FCM SEND FAILED")
-        logging.error(str(e))
+        logger.error("FCM send failed in firebase_service.send_push_notification: %s", e)
+        return None

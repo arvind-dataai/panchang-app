@@ -343,11 +343,11 @@ def get_masa(jd):
  
 def get_sunrise_sunset(year, month, day, lat, lon, tz_offset=5.5):
     try:
-        # swe.rise_trans: 1 = rise, 2 = set
-        jd_start = swe.julday(year, month, day, 0)
+        # Start from local midnight converted to UTC so rise/set lookup stays on the requested local date.
+        jd_start = swe.julday(year, month, day, -tz_offset)
         geopos = [lon, lat, 0]  # longitude, latitude, altitude
-        sunrise_jd= swe.rise_trans(jd_start, swe.SUN, 1, geopos)[1][0]
-        sunset_jd  = swe.rise_trans(jd_start, swe.SUN, 2, geopos)[1][0]
+        sunrise_jd = swe.rise_trans(jd_start, swe.SUN, swe.CALC_RISE, geopos)[1][0]
+        sunset_jd = swe.rise_trans(jd_start, swe.SUN, swe.CALC_SET, geopos)[1][0]
 
         # Convert JD to local time (default IST: UTC+5:30)
         sunrise_local = jd_to_local_datetime(sunrise_jd, tz_offset)
@@ -416,33 +416,36 @@ def get_moonrise_moonset(sunrise_jd, lat, lon, tz_offset=5.5):
     }
 
 
-def get_planet_positions(year, month, day, hour, lat, lon):
+def get_planet_positions(year, month, day, hour, lat, lon, tz_offset=5.5):
     try:
-        print(year, month, day, hour, lat, lon,"<=====get planet")
-        sunrise_jd,sunrise, sunset = get_sunrise_sunset(year, month, day, lat, lon)
+        sunrise_jd, sunrise, sunset = get_sunrise_sunset(
+            year,
+            month,
+            day,
+            lat,
+            lon,
+            tz_offset=tz_offset,
+        )
 
-        jd = swe.julday(year, month, day, hour)
         result = {}
 
-        # Lagna
-        lagna_details = get_lagna_details(sunrise_jd, lat, lon)
+        # Daily panchang values are anchored to the local sunrise.
+        lagna_details = get_lagna_details(sunrise_jd, lat, lon, tz_offset=tz_offset)
         result["lagna"] = lagna_details
 
-        # Moon Nakshatra
-        moon_details = get_nakshatra_details(sunrise_jd)
+        moon_details = get_nakshatra_details(sunrise_jd, tz_offset=tz_offset)
         result["moon"] = moon_details
 
-        # --- Panchang details ---
-        tithi_details = get_tithi_details(sunrise_jd)
+        tithi_details = get_tithi_details(sunrise_jd, tz_offset=tz_offset)
         result["tithi"] = tithi_details
-        yoga_details = get_yoga_details(sunrise_jd)
+        yoga_details = get_yoga_details(sunrise_jd, tz_offset=tz_offset)
         result["yoga"] = yoga_details
-        karna_details  = get_karana_details(sunrise_jd)
+        karna_details  = get_karana_details(sunrise_jd, tz_offset=tz_offset)
         result["karna"] = karna_details
         masa = get_masa(sunrise_jd)
-        vara = get_var(sunrise_jd)
+        vara = get_var(sunrise_jd, tz_offset=tz_offset)
 
-        moon_time = get_moonrise_moonset(sunrise_jd,lat,lon)
+        moon_time = get_moonrise_moonset(sunrise_jd, lat, lon, tz_offset=tz_offset)
         result["moon_time"] = moon_time
         
         
@@ -463,9 +466,11 @@ def get_planet_positions(year, month, day, hour, lat, lon):
     except Exception as e:
         raise ValueError(f"Error calculating Panchang: {str(e)}")
 
+
+
 def get_today_nakshatra_end_datetime(lat: float, lon: float, timezone_str: str):
     """
-    Returns today's nakshatra end time as timezone-aware datetime
+    Returns the daily nakshatra end time, anchored to the local sunrise.
     """
 
     tz = ZoneInfo(timezone_str)
@@ -476,17 +481,18 @@ def get_today_nakshatra_end_datetime(lat: float, lon: float, timezone_str: str):
     # Convert to local timezone
     local_now = now_utc.astimezone(tz)
 
-    year = local_now.year
-    month = local_now.month
-    day = local_now.day
-
-    # Calculate sunrise JD for this location
-    sunrise_jd, _, _ = get_sunrise_sunset(year, month, day, lat, lon, tz_offset=0)
-
     # Calculate tz offset dynamically (in hours)
     tz_offset_hours = local_now.utcoffset().total_seconds() / 3600
 
-    # Get nakshatra details
+    sunrise_jd, _, _ = get_sunrise_sunset(
+        local_now.year,
+        local_now.month,
+        local_now.day,
+        lat,
+        lon,
+        tz_offset=tz_offset_hours,
+    )
+
     nak_details = get_nakshatra_details(sunrise_jd, tz_offset=tz_offset_hours)
 
     # Convert end_time string → datetime

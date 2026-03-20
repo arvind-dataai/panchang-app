@@ -1,7 +1,7 @@
 # notification_service.py
 
 import logging
-from datetime import datetime, time, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 from .firebase_service import send_push_notification
 from app.db.repositories.device_repository import DeviceRepository
@@ -16,6 +16,7 @@ from app.astrology import (
 _SENT_CACHE = set()
 logger = logging.getLogger("notification")
 
+
 def _already_sent(device_token: str, notif_type: str, date_str: str) -> bool:
     return (device_token, notif_type, date_str) in _SENT_CACHE
 
@@ -24,18 +25,37 @@ def _mark_sent(device_token: str, notif_type: str, date_str: str):
     _SENT_CACHE.add((device_token, notif_type, date_str))
 
 
-def send_daily_notifications():
-    logging.info("🔔 Running daily notification check")
+def _deactivate_device_for_invalid_token(db, device):
+    device.is_active = False
 
+
+def _deactivate_invalid_devices(db, device_ids: list[str]):
+    for device_id in dict.fromkeys(device_ids):
+        device = DeviceRepository.get_device_by_device_id(db, device_id)
+        if device is None:
+            continue
+
+        _deactivate_device_for_invalid_token(db, device)
+
+    db.commit()
+
+    for device_id in dict.fromkeys(device_ids):
+        logger.warning(
+            "device_deactivated_invalid_fcm device_id=%s",
+            device_id,
+        )
+
+
+def send_daily_notifications():
     db = SessionLocal()
 
     try:
         devices = DeviceRepository.get_active_devices(db)
+        invalid_device_ids = []
 
         now_utc = datetime.utcnow().replace(tzinfo=ZoneInfo("UTC"))
 
         for device in devices:
-            # device is ORM object, NOT dict
             try:
                 # Skip devices without location/timezone information
                 if not device.timezone or device.latitude is None or device.longitude is None:
@@ -55,32 +75,34 @@ def send_daily_notifications():
                         hour=local_now.hour + local_now.minute / 60.0,
                         lat=device.latitude,
                         lon=device.longitude,
+                        tz_offset=local_now.utcoffset().total_seconds() / 3600,
                     )
                     nakshatra_name = (
                         panchang.get("moon", {}).get("nakshatra") or ""
                     )
                 except Exception as astro_err:
-                    logging.warning(
-                        f"Failed to compute nakshatra for device {device.device_id}: {astro_err}"
+                    logger.debug(
+                        "Failed to compute nakshatra for device %s: %s",
+                        device.device_id,
+                        astro_err,
                     )
 
                 # -------------------------
                 # 🌅 Morning Window (6:00–6:05)
                 # -------------------------
-                # if local_now.hour == 6 and 0 <= local_now.minute <= 5:
-                if 1==1:
+                if local_now.hour == 6 and 0 <= local_now.minute <= 5:
 
                     notif_type = "DAILY_NAKSHATRA"
 
                     if not _already_sent(device.fcm_token, notif_type, today_str):
 
-                        send_push_notification(
+                        message_id = send_push_notification(
                             token=device.fcm_token,
-                            title="Nakshatra Update",
+                            title="Nakshatra Update ✨",
                             body=(
-                                f"Today’s Nakshatra is {nakshatra_name}"
+                                f"Today's Nakshatra: {nakshatra_name} 🌙"
                                 if nakshatra_name
-                                else "Your nakshatra update is ready."
+                                else "Your daily nakshatra update is ready ✨"
                             ),
                             data={
                                 "type": notif_type,
@@ -88,13 +110,22 @@ def send_daily_notifications():
                                 "nakshatra": nakshatra_name,
                                 "navigateTo": "Home",
                                 "deviceId": str(device.device_id),
+                                "icon": "moon_stars",
+                                "emoji": "✨",
+                                "style": "daily",
                             },
+                            image_url="https://images.unsplash.com/photo-1532968961962-8a0cb3a2d4f5",
                         )
 
-                        _mark_sent(device.fcm_token, notif_type, today_str)
-                        logging.info("✅ Morning notification sent")
-                    else:
-                        logging.info("⚠️ Morning notification already sent")
+                        if message_id:
+                            _mark_sent(device.fcm_token, notif_type, today_str)
+                            logger.info(
+                                "notification_sent device_id=%s type=%s date=%s message_id=%s",
+                                device.device_id,
+                                notif_type,
+                                today_str,
+                                message_id,
+                            )
 
                 # -------------------------
                 # ⏳ Nakshatra End Window (±2 min)
@@ -114,13 +145,13 @@ def send_daily_notifications():
 
                         if not _already_sent(device.fcm_token, notif_type, today_str):
 
-                            send_push_notification(
+                            message_id = send_push_notification(
                                 token=device.fcm_token,
-                                title="Nakshatra Ending Soon",
+                                title="Nakshatra Ending Soon ⏳",
                                 body=(
-                                    f"{nakshatra_name} is about to end."
+                                    f"{nakshatra_name} ends soon 🌠"
                                     if nakshatra_name
-                                    else "Your current nakshatra is about to end."
+                                    else "Your current nakshatra is about to end ⏳"
                                 ),
                                 data={
                                     "type": notif_type,
@@ -128,18 +159,48 @@ def send_daily_notifications():
                                     "nakshatra": nakshatra_name,
                                     "navigateTo": "Home",
                                     "deviceId": str(device.device_id),
+                                    "icon": "hourglass",
+                                    "emoji": "⏳",
+                                    "style": "ending",
                                 },
+                                image_url="https://images.unsplash.com/photo-1519681393784-d120267933ba",
                             )
 
-                            _mark_sent(device.fcm_token, notif_type, today_str)
-                            logging.info("✅ Nakshatra end notification sent")
-                        else:
-                            logging.info("⚠️ End notification already sent")
+                            if message_id:
+                                _mark_sent(device.fcm_token, notif_type, today_str)
+                                logger.info(
+                                    "notification_sent device_id=%s type=%s date=%s message_id=%s",
+                                    device.device_id,
+                                    notif_type,
+                                    today_str,
+                                    message_id,
+                                )
             except ValueError as e:
                 if str(e) == "INVALID_FCM_TOKEN":
-                    # remove invalid token safely
-                    device.fcm_token = None
-                    db.commit()
+                    invalid_device_ids.append(device.device_id)
+                else:
+                    logger.error(
+                        "ERROR in notification_service.send_daily_notifications for device_id=%s: %s",
+                        device.device_id,
+                        e,
+                    )
+            except Exception as e:
+                logger.error(
+                    "ERROR in notification_service.send_daily_notifications for device_id=%s: %s",
+                    device.device_id,
+                    e,
+                )
+
+        if invalid_device_ids:
+            try:
+                _deactivate_invalid_devices(db, invalid_device_ids)
+            except Exception as e:
+                db.rollback()
+                logger.error(
+                    "ERROR in notification_service._deactivate_invalid_devices for devices=%s: %s",
+                    ",".join(dict.fromkeys(invalid_device_ids)),
+                    e,
+                )
 
     finally:
         db.close()
