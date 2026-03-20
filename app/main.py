@@ -1,9 +1,12 @@
+from dotenv import load_dotenv
 from fastapi import FastAPI, Query, HTTPException
 from contextlib import asynccontextmanager
 from .astrology import get_planet_positions
 from .scheduler import create_scheduler, shutdown_scheduler
 from app.api.routes import device_router
 import logging
+
+load_dotenv()
 
 logger = logging.getLogger("app")
 
@@ -16,15 +19,15 @@ async def lifespan(app: FastAPI):
 
     if scheduler:
         scheduler.start()
-        logger.debug("Scheduler started")
+        logger.info("Scheduler started")
     else:
-        logger.debug("Scheduler not started in this process")
+        logger.info("Scheduler not started in this process")
 
     try:
         yield
     finally:
         shutdown_scheduler()
-        logger.debug("Scheduler stopped")
+        logger.info("Scheduler stopped")
 
 logging.basicConfig(
     level=logging.INFO,

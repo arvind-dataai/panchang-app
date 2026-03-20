@@ -53,7 +53,7 @@ def create_scheduler():
         return _scheduler
 
     if not _acquire_scheduler_lock():
-        logger.debug(
+        logger.info(
             "Scheduler startup skipped in pid=%s because another process already owns the lock",
             os.getpid(),
         )

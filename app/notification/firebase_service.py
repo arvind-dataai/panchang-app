@@ -2,10 +2,13 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 import logging
 import os
+from dotenv import load_dotenv
 
 logger = logging.getLogger("firebase")
 # ---- Initialize Firebase only once ----
 _FIREBASE_APP = None
+
+load_dotenv()
 
 
 def _initialize_firebase():
@@ -22,7 +25,7 @@ def _initialize_firebase():
     cred = credentials.Certificate(service_account_path)
     _FIREBASE_APP = firebase_admin.initialize_app(cred)
 
-    logger.debug("Firebase initialized")
+    logger.info("Firebase initialized and ready")
     return _FIREBASE_APP
 
 
