@@ -43,6 +43,8 @@ def send_push_notification(
     try:
         _initialize_firebase()
 
+        data = {k: str(v) for k, v in (data or {}).items() if v is not None}
+
         message = messaging.Message(
             notification=messaging.Notification(
                 title=title,
@@ -50,15 +52,14 @@ def send_push_notification(
                 image=image_url,
             ),
             token=token,
-            data=data or {},
+            data=data,
             android=messaging.AndroidConfig(
                 priority="high",
                 notification=messaging.AndroidNotification(
-                    channel_id="nakshatra_updates",
+                    channel_id="default",
                     sound="default",
                     color="#F39C12",
                     image=image_url,
-                    click_action="FLUTTER_NOTIFICATION_CLICK",
                 ),
             ),
             apns=messaging.APNSConfig(
